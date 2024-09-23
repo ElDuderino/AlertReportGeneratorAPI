@@ -1,3 +1,6 @@
+import configparser
+import logging
+
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,9 +14,18 @@ import weasyprint
 
 import os
 
-os.add_dll_directory(r"C:\msys64\mingw64\bin\\")
+from starlette.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 
 class AlertHistoryRecord(BaseModel):
@@ -28,75 +40,137 @@ class AlertHistoryRecord(BaseModel):
 
 
 class Alert(BaseModel):
-    alertId: str
-    name: str
+    name: Optional[str] = None
+    id: str
+    owner: Optional[str] = None
+    description: Optional[str] = None
     sensorType: int
-    threshold: float
-    duration: int
+    sensorMacs: Optional[str] = None
+    backToNormalCommand: Optional[str] = None
+    thresholdBEndTime: Optional[float] = None
+    thresholdBStartTime: Optional[float] = None
+    alertEmails: Optional[str] = None
+    durationTrigger: Optional[int] = None
+    alertSMSes: Optional[str] = None
+    alertTriggerTTL: Optional[int] = None
+    alertFrequency: Optional[int] = None
+    revision: Optional[str] = None
+    maxNumAlerts: Optional[int] = None
+    thresholdB: Optional[float] = None
+    controlStrategy: Optional[bool] = None
+    thresholdA: Optional[float] = None
+    thresholdAType: Optional[bool] = None
+    thresholdBType: Optional[bool] = None
+    disabled: Optional[bool] = None
+    exceededCommand: Optional[str] = None
 
 
-def fetch_alert_history_record(alert_history_record_id: int, authorization: str) -> AlertHistoryRecord:
-    url = f"http://internal.rest.api/alertHistory/{alert_history_record_id}"
-    headers = {'Authorization': authorization}
-    # For now, we'll use a stubbed response
-    return AlertHistoryRecord(
-        mac=123456789,
-        timestamp=1633046400000,
-        type=1,
-        data=75.5,
-        alertId="alert123",
-        isActive=False,
-        eventId=alert_history_record_id,
-        rtnTimestamp=1633050000000
-    )
+class AretasAPIUtils:
 
+    def __init__(self, access_token: str):
+        config = configparser.ConfigParser()
+        config.read('config.cfg')
+        self.api_base_url = config.get("ARETAS", "api_base_url")
+        self.access_token = access_token
+        self.logger = logging.getLogger(__name__)
 
-def fetch_alert(alertId: str, authorization: str) -> Alert:
-    url = f"http://internal.rest.api/alerts/{alertId}"
-    headers = {'Authorization': authorization}
-    # Stubbed response
-    return Alert(
-        alertId=alertId,
-        name="High Temperature Alert",
-        sensorType=1,
-        threshold=70.0,
-        duration=300
-    )
+    def fetch_alert_history_record(self, eventId: int, authorization: str) -> AlertHistoryRecord:
 
+        self.logger.info(f"Fetching AlertHistoryRecord for {eventId}")
 
-def fetch_chart_image(mac: int, start_time: int, end_time: int, sensor_type: int, authorization: str) -> bytes:
-    url = f"http://internal.rest.api/chart?mac={mac}&start={start_time}&end={end_time}&type={sensor_type}"
-    headers = {'Authorization': authorization}
-    # Stubbed response: Generate a placeholder image
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError:
-        raise ImportError("Please install Pillow: pip install Pillow")
-    img = Image.new('RGB', (600, 400), color=(255, 255, 255))
-    d = ImageDraw.Draw(img)
-    text = "Sensor Data Chart Placeholder"
-    font_size = 20
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        font = ImageFont.load_default()
-    text_width, text_height = d.textsize(text, font=font)
-    x = (img.width - text_width) / 2
-    y = (img.height - text_height) / 2
-    d.text((x, y), text, fill=(0, 0, 0), font=font)
-    buffer = BytesIO()
-    img.save(buffer, format='JPEG')
-    return buffer.getvalue()
+        url = f"{self.api_base_url}alertlog/getbyeventid?eventId={eventId}"
+        headers = {'Authorization': f"Bearer {authorization}"}
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            # Parse the JSON response into an AlertHistoryRecord model
+            return AlertHistoryRecord(**response.json())
+        else:
+            response.raise_for_status()
+
+    def fetch_alerts(self, authorization: str) -> list[Alert]:
+        self.logger.info(f"Fetching alerts")
+
+        url = f"{self.api_base_url}alert/list"
+        headers = {'Authorization': f"Bearer {authorization}"}
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            # Parse the JSON response into a list of Alert models
+            return [Alert(**alert) for alert in response.json()]
+        else:
+            response.raise_for_status()
+
+    def fetch_alert(self, alert_id: str, auth_token: str) -> Alert | None:
+
+        alerts = self.fetch_alerts(auth_token)
+
+        for alert in alerts:
+            if alert.id == alert_id:
+                return alert
+
+        return None
+
+    def fetch_chart_image(self, mac, start_timestamp, end_timestamp, sensortype, auth_token):
+
+        self.logger.info(f"Fetching chart image for: {mac} start:{start_timestamp} end:{end_timestamp} sensortype:{sensortype}")
+
+        url = f"{self.api_base_url}sensordata/chartimage"
+        headers = {
+            "Authorization": f"Bearer {auth_token}"
+        }
+        params = {
+            "mac": mac,
+            "begin": start_timestamp,
+            "end": end_timestamp,
+            "type": sensortype,
+            "width": 640,  # default value
+            "height": 480,  # default value
+            "limit": 2000000,
+            "downsample": False,
+            "threshold": 100,
+            "movingAverage": False,
+            "windowSize": 1,
+            "movingAverageType": 0,
+            "offsetData": False,
+            "requestedIndexes": [0],  # default value
+            "arrIEQAssumptions": [0],  # default value
+            "iqRange": -1,
+            "interpolateData": False,
+            "interpolateTimestep": 30000,
+            "interpolateType": 0
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            return response.content  # Returns the image data in PNG format
+        else:
+            response.raise_for_status()
 
 
 @app.get("/generate_alert_pdf/{alert_history_record_id}")
 async def generate_alert_pdf(alert_history_record_id: int, authorization: Optional[str] = Header(None)):
+
+    logger.info("Attempting to generate AlertHistoryLog pdf")
+
     if not authorization:
+        print("Missing authorization header!")
         raise HTTPException(status_code=401, detail="Authorization header missing")
 
+        # Extract the token from the "Bearer <token>" format
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
+
+    access_token = authorization.split(" ")[1]
+
+    api = AretasAPIUtils(access_token)
+
     # Fetch data
-    alert_history_record = fetch_alert_history_record(alert_history_record_id, authorization)
-    alert = fetch_alert(alert_history_record.alertId, authorization)
+    alert_history_record = api.fetch_alert_history_record(alert_history_record_id, access_token)
+    alert = api.fetch_alert(alert_history_record.alertId, access_token)
 
     # Calculate times with padding
     alert_time = datetime.fromtimestamp(alert_history_record.timestamp / 1000)
@@ -106,8 +180,12 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
     end_time = int((rtn_time + timedelta(hours=1)).timestamp() * 1000)
 
     # Fetch chart image
-    chart_image_bytes = fetch_chart_image(alert_history_record.mac, start_time, end_time, alert_history_record.type,
-                                          authorization)
+    chart_image_bytes = api.fetch_chart_image(alert_history_record.mac,
+                                              start_time,
+                                              end_time,
+                                              alert_history_record.type,
+                                              access_token)
+
     chart_image_base64 = base64.b64encode(chart_image_bytes).decode('utf-8')
 
     # Prepare template data
@@ -153,7 +231,7 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
         </div>
         <div class="section image">
             <h2>Sensor Data Chart</h2>
-            <img src="data:image/jpeg;base64,{{ chart_image_base64 }}" alt="Sensor Data Chart" />
+            <img width="500" height="500" src="data:image/jpeg;base64,{{ chart_image_base64 }}" alt="Sensor Data Chart" />
         </div>
     </body>
     </html>
@@ -169,11 +247,15 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
     )
 
     # Generate PDF
-    pdf = weasyprint.HTML(string=html_content).write_pdf()
+    pdf = weasyprint.HTML(string=html_content).write_pdf(presentational_hints=True)
 
-    return StreamingResponse(BytesIO(pdf), media_type="application/pdf",
-                             headers={"Content-Disposition": "inline; filename=alert_report.pdf"})
+    return StreamingResponse(
+        BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=alert_report.pdf"}
+    )
 
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     import uvicorn
