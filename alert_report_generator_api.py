@@ -11,6 +11,10 @@ import base64
 import requests
 from jinja2 import Template
 import weasyprint
+import pandas as pd
+
+import plotly.graph_objects as go
+import plotly.express as px
 
 import os
 
@@ -113,9 +117,89 @@ class AretasAPIUtils:
 
         return None
 
+    def fetch_image_plotly(self, mac, start_timestamp, end_timestamp, sensortypes:list, auth_token):
+
+        self.logger.info(
+            f"Fetching sensor data for: mac={mac}, start={start_timestamp}, end={end_timestamp}, sensortypes={sensortypes}")
+
+        url = f"{self.api_base_url}sensordata/byrange"
+        headers = {
+            "Authorization": f"Bearer {auth_token}"
+        }
+        params = {
+            "mac": mac,
+            "begin": start_timestamp,
+            "end": end_timestamp,
+            "type": sensortypes,
+            "limit": 2000000,
+            "downsample": False,
+            "threshold": 100,
+            "movingAverage": False,
+            "windowSize": 1,
+            "movingAverageType": 0,
+            "offsetData": False,
+            "requestedIndexes": [0],
+            "arrIEQAssumptions": [0],
+            "iqRange": -1,
+            "interpolateData": False,
+            "interpolateTimestep": 30000,
+            "interpolateType": 0
+        }
+
+        # Fetch the sensor data from the API
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            response.raise_for_status()
+
+        # Parse the sensor data
+        sensor_data = response.json()
+
+        # Separate the data by type
+        data_by_type = {}
+        for datum in sensor_data:
+            sensor_type = datum['type']
+            if sensor_type not in data_by_type:
+                data_by_type[sensor_type] = {"timestamps": [], "values": []}
+
+            data_by_type[sensor_type]["timestamps"].append(datum["timestamp"])
+            data_by_type[sensor_type]["values"].append(datum["data"])
+
+        # Create a Plotly line chart
+        fig = go.Figure()
+
+        for sensor_type, data in data_by_type.items():
+            # Convert timestamps from Unix epoch to datetime
+            data_frame = pd.DataFrame({
+                "timestamp": pd.to_datetime(data["timestamps"], unit='ms'),
+                "value": data["values"]
+            })
+
+            fig.add_trace(go.Scatter(
+                x=data_frame["timestamp"],
+                y=data_frame["value"],
+                mode='lines',
+                name=f'Sensor Type {sensor_type}'
+            ))
+
+        # Customize layout
+        fig.update_layout(
+            title=f"Sensor Data for MAC: {mac}",
+            xaxis_title="Time",
+            yaxis_title="Sensor Value",
+            template="plotly",
+            width=800,  # Set your desired width
+            height=600,  # Set your desired height
+        )
+
+        # Export the plot as a PNG image
+        image_bytes = fig.to_image(format="png")
+
+        return image_bytes
+
     def fetch_chart_image(self, mac, start_timestamp, end_timestamp, sensortype, auth_token):
 
-        self.logger.info(f"Fetching chart image for: {mac} start:{start_timestamp} end:{end_timestamp} sensortype:{sensortype}")
+        self.logger.info(
+            f"Fetching chart image for: {mac} start:{start_timestamp} end:{end_timestamp} sensortype:{sensortype}")
 
         url = f"{self.api_base_url}sensordata/chartimage"
         headers = {
@@ -125,7 +209,7 @@ class AretasAPIUtils:
             "mac": mac,
             "begin": start_timestamp,
             "end": end_timestamp,
-            "type": sensortype,
+            "type": [sensortype],
             "width": 640,  # default value
             "height": 480,  # default value
             "limit": 2000000,
@@ -153,7 +237,6 @@ class AretasAPIUtils:
 
 @app.get("/generate_alert_pdf/{alert_history_record_id}")
 async def generate_alert_pdf(alert_history_record_id: int, authorization: Optional[str] = Header(None)):
-
     logger.info("Attempting to generate AlertHistoryLog pdf")
 
     if not authorization:
@@ -180,11 +263,11 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
     end_time = int((rtn_time + timedelta(hours=1)).timestamp() * 1000)
 
     # Fetch chart image
-    chart_image_bytes = api.fetch_chart_image(alert_history_record.mac,
-                                              start_time,
-                                              end_time,
-                                              alert_history_record.type,
-                                              access_token)
+    chart_image_bytes = api.fetch_image_plotly(alert_history_record.mac,
+                                               start_time,
+                                               end_time,
+                                               alert_history_record.type,
+                                               access_token)
 
     chart_image_base64 = base64.b64encode(chart_image_bytes).decode('utf-8')
 
@@ -212,8 +295,8 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
         </div>
         <div class="section">
             <h2>Alert Details</h2>
-            <p><strong>Alert ID:</strong> {{ alert.alertId }}</p>
-            <p><strong>Alert Name:</strong> {{ alert.name }}</p>
+            <p><strong>Alert ID:</strong> {{ alert.id }}</p>
+            <p><strong>Alert Name:</strong> {{ alert.description }}</p>
             <p><strong>Sensor Type:</strong> {{ alert.sensorType }}</p>
             <p><strong>Threshold:</strong> {{ alert.threshold }}</p>
             <p><strong>Duration:</strong> {{ alert.duration }} seconds</p>
@@ -254,6 +337,7 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
         media_type="application/pdf",
         headers={"Content-Disposition": "inline; filename=alert_report.pdf"}
     )
+
 
 logger = logging.getLogger(__name__)
 
