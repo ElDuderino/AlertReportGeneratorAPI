@@ -298,7 +298,7 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
             <p><strong>Alert ID:</strong> {{ alert.id }}</p>
             <p><strong>Alert Name:</strong> {{ alert.description }}</p>
             <p><strong>Sensor Type:</strong> {{ alert.sensorType }}</p>
-            <p><strong>Threshold:</strong> {{ alert.threshold }}</p>
+            <p><strong>Alert Threshold:</strong> {{ alert.threshold }}</p>
             <p><strong>Duration:</strong> {{ alert.duration }} seconds</p>
         </div>
         <div class="section">
