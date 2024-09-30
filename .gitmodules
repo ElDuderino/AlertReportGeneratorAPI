@@ -1,0 +1,3 @@
+[submodule "AretasPythonAPI"]
+	path = AretasPythonAPI
+	url = https://github.com/AretasSensorNetworks/AretasPythonAPI
