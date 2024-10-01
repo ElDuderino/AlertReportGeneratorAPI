@@ -3,20 +3,12 @@ import logging
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
 from io import BytesIO
 import base64
-import requests
 from jinja2 import Template
 import weasyprint
-import pandas as pd
-
-import plotly.graph_objects as go
-import plotly.express as px
-
-import os
 
 from starlette.middleware.cors import CORSMiddleware
 
