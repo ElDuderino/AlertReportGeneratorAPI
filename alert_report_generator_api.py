@@ -24,6 +24,8 @@ from AretasPythonAPI.api_config import APIConfig
 from AretasPythonAPI.api_utils import APIUtils
 from AretasPythonAPI.aretas_client import APIClient
 from AretasPythonAPI.auth import APIAuth
+from AretasPythonAPI.building_maps import BuildingMapAPIClient
+from AretasPythonAPI.entities import ClientLocationView, Point
 
 app = FastAPI()
 
@@ -35,6 +37,24 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
     allow_headers=["*"],  # Allow all headers
 )
+
+
+def get_building_map(api_auth: APIAuth, location_id, building_map_id, points: list[Point]):
+    building_maps = BuildingMapAPIClient(api_auth)
+
+    try:
+        image_data = building_maps.get_map_image_with_points(location_id, building_map_id, points)
+
+        if image_data:
+            logger.info("Image with points retrieved successfully")
+            return image_data
+        else:
+            logger.error("Failed to retrieve the map image with points.")
+            return None
+
+    except Exception as e:
+        logger.error(e)
+        return None
 
 
 @app.get("/generate_alert_pdf/{alert_history_record_id}")
@@ -55,9 +75,9 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
     api_auth = APIAuth(config, token=access_token)
     client = APIClient(api_auth)
 
-    api = APIUtils(api_auth)
+    client_location_view: ClientLocationView = client.get_client_location_view()
 
-    # fetch the SensorObject for that mac
+    api = APIUtils(api_auth)
 
     # fetch the Location containing that SensorObject
 
@@ -65,12 +85,32 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
     alert_history_record = api.fetch_alert_history_record(alert_history_record_id)
     alert = api.fetch_alert(alert_history_record.alertId)
 
+    # fetch the SensorObject for that mac
+    sensor_obj = client.get_sensor_by_mac(alert_history_record.mac)
+    location_obj = client.get_location_by_id(sensor_obj.owner)
+
     # Calculate times with padding
     alert_time = datetime.fromtimestamp(alert_history_record.timestamp / 1000)
     rtn_time = datetime.fromtimestamp(
         alert_history_record.rtnTimestamp / 1000) if alert_history_record.rtnTimestamp > 0 else datetime.now()
     start_time = int((alert_time - timedelta(hours=1)).timestamp() * 1000)
     end_time = int((rtn_time + timedelta(hours=1)).timestamp() * 1000)
+
+    building_map_img_base64 = None
+    has_building_map = False
+
+    if sensor_obj.buildingMapId and len(sensor_obj.buildingMapId) > 0:
+        try:
+            building_map_img_bytes = get_building_map(
+                api_auth,
+                location_obj.location.id,
+                sensor_obj.buildingMapId,
+                [Point(sensor_obj.imgMapX, sensor_obj.imgMapY, 0.0)]
+            )
+            building_map_img_base64 = base64.b64encode(building_map_img_bytes).decode('utf-8')
+            has_building_map = True
+        except Exception as e:
+            logger.error(e)
 
     # Fetch chart image
     chart_image_bytes = api.fetch_image_plotly(alert_history_record.mac,
@@ -125,6 +165,12 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
             <h2>Sensor Data Chart</h2>
             <img width="500" height="500" src="data:image/jpeg;base64,{{ chart_image_base64 }}" alt="Sensor Data Chart" />
         </div>
+        {% if has_building_map %}
+        <div class="section image">
+            <h2>Building Map</h2>
+            <img width="500" height="500" src="data:image/png;base64,{{ building_map_img_base64 }}" alt="Building Map" />
+        </div>
+        {% endif %}
     </body>
     </html>
     """
@@ -135,7 +181,9 @@ async def generate_alert_pdf(alert_history_record_id: int, authorization: Option
         alert_history=alert_history_record,
         alert_time=alert_time_str,
         rtn_time=rtn_time_str,
-        chart_image_base64=chart_image_base64
+        chart_image_base64=chart_image_base64,
+        has_building_map=has_building_map,
+        building_map_img_base64=building_map_img_base64
     )
 
     # Generate PDF
